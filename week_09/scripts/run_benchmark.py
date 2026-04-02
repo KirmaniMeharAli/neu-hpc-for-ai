@@ -1,104 +1,59 @@
 """
-Week 9: Run DeepSeekV3 MoE benchmark on Modal.com B200
+Week 9: Run DeepSeekV3 MoE benchmark on Modal.com
 
 Usage:
     modal run run_benchmark.py
-
-This script:
-    1. Clones ThunderKittens
-    2. Compiles the TK-based MoE benchmark
-    3. Runs the benchmark on a B200 GPU
-    4. Prints performance comparison results
 """
 
 import modal
+import os
 
-app = modal.App("week9-moe-tk-benchmark")
+app = modal.App("week9-moe-benchmark")
 
-# Image with CUDA 12.6 + build tools
 image = (
-    modal.Image.from_registry("nvidia/cuda:12.6.0-devel-ubuntu22.04")
-    .apt_install("git", "build-essential", "python3")
+    modal.Image.debian_slim(python_version="3.11")
+    .apt_install("build-essential", "wget")
     .run_commands(
-        "git clone --depth 1 https://github.com/HazyResearch/ThunderKittens.git /opt/thunderkittens"
+        "wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb",
+        "dpkg -i cuda-keyring_1.1-1_all.deb",
+        "apt-get update",
+        "apt-get install -y cuda-toolkit-12-6",
     )
 )
 
 @app.function(
     image=image,
-    gpu="B200",  # Request B200 GPU
-    timeout=1200,
-    mounts=[modal.Mount.from_local_dir(".", remote_path="/root/week_09")],
+    gpu="H100",
+    timeout=600,
 )
-def run_benchmark():
+def run_benchmark(benchmark_src: str):
     import subprocess
     import os
 
-    os.chdir("/root/week_09")
-    os.environ["THUNDERKITTENS_ROOT"] = "/opt/thunderkittens"
+    os.makedirs("/root/week_09", exist_ok=True)
+    with open("/root/week_09/benchmark.cu", "w") as f:
+        f.write(benchmark_src)
 
-    # Build
+    os.chdir("/root/week_09")
+    os.environ["PATH"] = "/usr/local/cuda-12.6/bin:" + os.environ.get("PATH", "")
+
+    build_cmd = "nvcc -std=c++17 -O3 -arch=sm_90a -lcurand -o benchmark_moe benchmark.cu 2>&1"
+
     print("=" * 60)
-    print("Building MoE benchmark with ThunderKittens...")
+    print("Building...")
     print("=" * 60)
-    result = subprocess.run(
-        "make GPU_TARGET=B200 TK_ROOT=/opt/thunderkittens 2>&1",
-        shell=True, capture_output=True, text=True
-    )
+    result = subprocess.run(build_cmd, shell=True, capture_output=True, text=True)
     print(result.stdout)
     if result.returncode != 0:
         print("BUILD ERRORS:")
         print(result.stderr)
         return
 
-    # Run benchmark
-    print("\n" + "=" * 60)
-    print("Running benchmark on B200...")
+    print("Build successful!\n")
     print("=" * 60)
-    result = subprocess.run(
-        "./benchmark_moe 2>&1",
-        shell=True, capture_output=True, text=True
-    )
-    print(result.stdout)
-    if result.stderr:
-        print(result.stderr)
-
-
-@app.function(
-    image=image,
-    gpu="H100",  # Fallback to H100 if B200 unavailable
-    timeout=1200,
-    mounts=[modal.Mount.from_local_dir(".", remote_path="/root/week_09")],
-)
-def run_benchmark_h100():
-    import subprocess
-    import os
-
-    os.chdir("/root/week_09")
-    os.environ["THUNDERKITTENS_ROOT"] = "/opt/thunderkittens"
-
-    # Build for H100
+    print("Running benchmark...")
     print("=" * 60)
-    print("Building MoE benchmark for H100...")
-    print("=" * 60)
-    result = subprocess.run(
-        "make GPU_TARGET=H100 TK_ROOT=/opt/thunderkittens 2>&1",
-        shell=True, capture_output=True, text=True
-    )
-    print(result.stdout)
-    if result.returncode != 0:
-        print("BUILD ERRORS:")
-        print(result.stderr)
-        return
-
-    # Run
-    print("\n" + "=" * 60)
-    print("Running benchmark on H100...")
-    print("=" * 60)
-    result = subprocess.run(
-        "./benchmark_moe 2>&1",
-        shell=True, capture_output=True, text=True
-    )
+    result = subprocess.run("./benchmark_moe 2>&1", shell=True, capture_output=True, text=True)
     print(result.stdout)
     if result.stderr:
         print(result.stderr)
@@ -106,9 +61,11 @@ def run_benchmark_h100():
 
 @app.local_entrypoint()
 def main():
-    try:
-        print("Attempting B200...")
-        run_benchmark.remote()
-    except Exception as e:
-        print(f"B200 not available ({e}), falling back to H100...")
-        run_benchmark_h100.remote()
+    base_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+    bench_file = os.path.join(base_dir, "benchmark", "benchmark.cu")
+
+    with open(bench_file, "r") as f:
+        src = f.read()
+
+    print(f"Sending benchmark.cu ({len(src)} bytes) to Modal...")
+    run_benchmark.remote(src)
