@@ -1,0 +1,6 @@
+# Use local transformers directory (cloned from GitHub)
+# Install with: pip install -e ./transformers
+-e ./transformers
+
+torch>=2.0.0
+numpy
