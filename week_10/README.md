@@ -101,9 +101,17 @@ The benchmark measures throughput (tokens/sec) for increasing numbers of concurr
 1. **Sequential**: `Engine.generate()` called one request at a time in a loop.
 2. **Batched**: `Scheduler.run_to_completion()` processing all requests with continuous batching.
 
-**Expected results:**
+**Results (A100-40GB, Qwen3-0.6B, max_tokens=50):**
 
-With 1 request, both approaches are equivalent (the scheduler just calls `decode_step` directly). As concurrency increases, the batched scheduler should show significantly higher throughput because:
+| Requests | Sequential (tok/s) | Batched (tok/s) | Speedup |
+|----------|-------------------|-----------------|---------|
+| 1        | 30.9              | 30.1            | 0.97x   |
+| 2        | 29.9              | 45.1            | 1.51x   |
+| 4        | 30.4              | 79.9            | 2.63x   |
+| 8        | 30.5              | 127.9           | 4.19x   |
+| 16       | 31.0              | 174.9           | 5.64x   |
+
+With 1 request, both approaches are equivalent (the scheduler just calls `decode_step` directly). As concurrency increases, the batched scheduler shows significantly higher throughput because:
 
 - Multiple decode steps share one GPU kernel launch (amortized overhead).
 - The GPU's parallel compute units are better utilized when processing multiple sequences simultaneously.
