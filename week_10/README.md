@@ -50,6 +50,7 @@ Without caching, generating 100 tokens from a 1000-token prompt would require pr
 
 **`prefill(seq, sampling_params)`:**
 This is the compute-bound phase. All prompt tokens are fed through the model in a single forward pass. The method:
+
 1. Converts `seq.prompt_token_ids` into a `[1, prompt_len]` tensor.
 2. Runs one forward pass through the model, producing logits and a `DynamicCache` of past key/values.
 3. Samples the first output token from the last position's logits.
@@ -58,6 +59,7 @@ This is the compute-bound phase. All prompt tokens are fed through the model in 
 
 **`generate(prompt, sampling_params)`:**
 Wires prefill and decode into a complete generation loop:
+
 1. Tokenizes the prompt and creates a `Sequence`.
 2. Calls `prefill()` to get the first token.
 3. Enters a decode loop calling `decode_step()` (which feeds only the last token + cached KV to the model).
@@ -74,12 +76,14 @@ The prefill phase is compute-bound (processing many tokens in parallel via matri
 
 **`_decode_running(sampling_params)`:**
 The core of continuous batching. Instead of decoding each sequence independently (wasting GPU cycles), all running sequences are batched into a single `decode_batch()` call. After receiving new tokens:
+
 - Each token is appended to its sequence's output.
 - Sequences hitting EOS or `max_tokens` are moved to the `finished` list.
 - Only still-active sequences remain in `running`.
 
 **`step(sampling_params)`:**
 One scheduling iteration that:
+
 1. Prefills one waiting request (if room in the batch), moving it to `running`.
 2. Decodes all running sequences together in one batched forward pass.
 
@@ -104,12 +108,12 @@ The benchmark measures throughput (tokens/sec) for increasing numbers of concurr
 **Results (A100-40GB, Qwen3-0.6B, max_tokens=50):**
 
 | Requests | Sequential (tok/s) | Batched (tok/s) | Speedup |
-|----------|-------------------|-----------------|---------|
-| 1        | 30.9              | 30.1            | 0.97x   |
-| 2        | 29.9              | 45.1            | 1.51x   |
-| 4        | 30.4              | 79.9            | 2.63x   |
-| 8        | 30.5              | 127.9           | 4.19x   |
-| 16       | 31.0              | 174.9           | 5.64x   |
+| -------- | ------------------ | --------------- | ------- |
+| 1        | 32.7               | 33.1            | 1.01x   |
+| 2        | 33.6               | 47.8            | 1.42x   |
+| 4        | 33.5               | 87.8            | 2.62x   |
+| 8        | 33.6               | 142.8           | 4.25x   |
+| 16       | 33.7               | 198.7           | 5.90x   |
 
 With 1 request, both approaches are equivalent (the scheduler just calls `decode_step` directly). As concurrency increases, the batched scheduler shows significantly higher throughput because:
 
@@ -128,17 +132,20 @@ The speedup is most pronounced for decode-heavy workloads (long generation with 
 This implements the core idea from the PagedAttention / vLLM paper: manage KV cache memory in fixed-size blocks (analogous to OS virtual memory pages) rather than contiguous allocations.
 
 **`allocate(seq_id, num_tokens)`:**
+
 1. Computes the number of blocks needed: `ceil(num_tokens / block_size)`.
 2. Checks if enough free blocks are available (raises `RuntimeError` if not).
 3. Pops block IDs from `free_blocks` and records the mapping in `seq_to_blocks`.
 
 **`free(seq_id)`:**
+
 1. Retrieves all block IDs for the sequence.
 2. Zeros out the K/V data in each block across all layers.
 3. Returns blocks to the `free_blocks` pool.
 
 **Why paging matters:**
 Without paging, each sequence pre-allocates a contiguous chunk for `max_seq_len` tokens, leading to:
+
 - **Internal fragmentation**: most sequences don't use all `max_seq_len` tokens.
 - **External fragmentation**: freed chunks leave gaps that new sequences may not fit into.
 
